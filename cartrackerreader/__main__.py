@@ -6,7 +6,8 @@ import tkinter.filedialog as fbox
 from threading import Thread
 import serial
 import time
-import os.path
+from pathlib import Path
+from importlib.resources import files
 import json
 class ReaderWindow(Tk):
     starttoken = b'--StartSQL'
@@ -20,10 +21,13 @@ class ReaderWindow(Tk):
             ('Serial timeout','timeout',self.set_timeout),
             ('Request delay time','delay',self.set_delay),
         )
-        self.read_thread = None
+        try:
+            self.settings_path = files('cartrackerreader') / 'settings.json'
+        except ModuleNotFoundError:
+            self.settings_path = Path(__file__).parent / 'settings.json'
         self._run_read_thread = True
         try:
-            f = open(os.path.join(os.path.dirname(__file__),"settings.json"),"r")
+            f = self.settings_path.open()
             self.settings = json.load(f)
             f.close()
         except IOError:
@@ -81,34 +85,51 @@ class ReaderWindow(Tk):
         incoming = b''
         bytesread = 0
         buffersize = self.settings['buffersize']
-        message = 'Closed port and wrote to file "%s"'
+        message = ''
+        errors = False
         try:
             while self._run_read_thread:
                 incoming = ser.read(buffersize)
                 buffer += incoming
-                if len(incoming) < buffersize or self.endtoken in buffer:
+                if len(incoming) < buffersize:
                     break
                 else:
                     bytesread += buffersize
                     self.statustext.config(text='Reading (%i bytes)' % bytesread)
         except serial.SerialException:
             message += "\nError while reading data"
-        ser.close()
+            errors = True
         try:
             startindex = buffer.index(self.starttoken) + len(self.starttoken)
         except ValueError:
             startindex = 0
             message += '\nCouldn\'t find start token'
+            errors = True
         try:
             endindex = buffer.index(self.endtoken)
         except ValueError:
             endindex = len(buffer)
             message += '\nCouldn\'t find end token'
-        filename = 'TrackerData_%i.sql' % int(time.time())
-        f = open(os.path.join(self.settings.get('savepath'),filename),'wb')
-        f.write(buffer[startindex:endindex])
-        f.close()
-        self.statustext.config(text=message % filename)
+            errors = True
+        buffer = buffer[startindex:endindex].strip()
+        if len(buffer) == 0:
+            self.statustext.config(text='No data returned' + message)
+        else:
+            filename = 'TrackerData_%i.sql' % int(time.time())
+            self.statustext.config(text='Wrote to file "' + filename + '"' + message)
+            f = open(Path(self.settings.get('savepath')) / filename,'wb')
+            f.write(buffer)
+            f.close()
+            if box.askyesno('Reading complete','Reading complete, would you like to delete the data on the Car Tracker?\n\n' + ('There have been errors in retrieving the data\n\n' if errors else '') + 'REMEMBER: This cannot be undone'):
+                self.startbtn.config(state=DISABLED)
+                try:
+                    self.statustext.config(text='Sending request...')
+                    ser.write(b'd')
+                    self.statustext.config(text='Sent delete request')
+                except serial.SerialTimeoutException:
+                    self.statustext.config(text='Timed out when sending request')
+                except serial.SerialException:
+                    self.statustext.config(text='Error sending request')
         self.read_end()
     def start_read(self):
         for item in self.settingsitems:
@@ -116,16 +137,15 @@ class ReaderWindow(Tk):
                 box.showinfo('Car Tracker Reader','Please complete the settings before reading from a device')
                 return
         if self.savebtn.config()['state'][4] == NORMAL: self.save_settings()
-        self._run_read_thread = True
         for button in self.buttons:
             button.config(state=DISABLED)
-        self.read_thread = Thread(target=self.read,daemon=True)
-        self.read_thread.start()
+        self._run_read_thread = True
+        Thread(target=self.read,daemon=True).start()
     def stop_read(self):
         self.startbtn.config(text='Stopping',state=DISABLED)
         self._run_read_thread = False
     def save_settings(self):
-        f = open(os.path.join(os.path.dirname(__file__),"settings.json"),"w")
+        f = self.settings_path.open('w')
         json.dump(self.settings,f)
         f.close()
         self.savebtn.config(state=DISABLED)
