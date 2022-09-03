@@ -125,7 +125,12 @@ class ReaderWindow(Tk):
                 try:
                     self.statustext.config(text='Sending request...')
                     ser.write(b'd')
-                    self.statustext.config(text='Sent delete request')
+                    self.statustext.config(text='Deleting...')
+                    buffer = ser.read(buffersize)
+                    if b'1' in buffer:
+                        self.statustext.config(text='Deleted Car Tracker data')
+                    else:
+                        self.statustext.config(text='Deletion not confirmed by Car Tracker')
                 except serial.SerialTimeoutException:
                     self.statustext.config(text='Timed out when sending request')
                 except serial.SerialException:
